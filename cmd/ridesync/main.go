@@ -29,22 +29,44 @@ func main() {
 		w.Write([]byte(`{"status": "ok", "service": "ridesync"}`))
 	})
 
-	r.Get("/api/v1/drivers/nearby", func(w http.ResponseWriter, r *http.Request) {
+	// Temporary endpoint to simulate a driver updating their location
+	r.Post("/api/v1/drivers/update", func(w http.ResponseWriter, r *http.Request) {
+		driverID := r.URL.Query().Get("id")
 		latStr := r.URL.Query().Get("lat")
 		lngStr := r.URL.Query().Get("lng")
-		radiusStr := r.URL.Query().Get("radius")
 
 		lat, errLat := strconv.ParseFloat(latStr, 64)
 		lng, errLng := strconv.ParseFloat(lngStr, 64)
-		radius, errRad := strconv.ParseFloat(radiusStr, 64)
 
-		if errLat != nil || errLng != nil || errRad != nil {
-			// http.Error is a handy helper to send a text response with a status code
-			http.Error(w, "Invalid lat, lng, or radius. Must be valid numbers.", http.StatusBadRequest)
+		if driverID == "" || errLat != nil || errLng != nil {
+			http.Error(w, "Invalid parameters", http.StatusBadRequest)
 			return
 		}
 
-		drivers, err := redisCache.GetNearbyDrivers(r.Context(), lat, lng, radius)
+		err := redisCache.SaveDriverLocation(r.Context(), driverID, lat, lng)
+		if err != nil {
+			http.Error(w, "Failed to save location", http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"status": "driver location updated"}`))
+	})
+
+	r.Get("/api/v1/drivers/nearby", func(w http.ResponseWriter, r *http.Request) {
+		latStr := r.URL.Query().Get("lat")
+		lngStr := r.URL.Query().Get("lng")
+
+		lat, errLat := strconv.ParseFloat(latStr, 64)
+		lng, errLng := strconv.ParseFloat(lngStr, 64)
+
+		if errLat != nil || errLng != nil {
+			http.Error(w, "Invalid lat or lng", http.StatusBadRequest)
+			return
+		}
+
+		// Call the updated method (Radius removed)
+		drivers, err := redisCache.GetNearbyDrivers(r.Context(), lat, lng)
 		if err != nil {
 			http.Error(w, "Failed to search for drivers", http.StatusInternalServerError)
 			return
