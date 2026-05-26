@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"sync"
 
 	"github.com/aswinkmanoj/RideSync/internal/cache"
 	"github.com/go-chi/chi/v5"
@@ -14,17 +15,25 @@ import (
 )
 
 func main() {
+	type LocationUpdate struct {
+		Latitude  float64 `json:"lat"`
+		Longitude float64 `json:"lng"`
+	}
+
+	type DriverHub struct {
+		sync.RWMutex
+		Connections map[string]*websocket.Conn
+	}
+
+	var hub = DriverHub{
+		Connections: make(map[string]*websocket.Conn),
+	}
 
 	var upgrader = websocket.Upgrader{
 		ReadBufferSize:  1024,
 		WriteBufferSize: 1024,
 
 		CheckOrigin: func(r *http.Request) bool { return true },
-	}
-
-	type LocationUpdate struct {
-		Latitude  float64 `json:"lat"`
-		Longitude float64 `json:"lng"`
 	}
 
 	redisCache, err := cache.NewRedisCache("localhost:6379")
@@ -55,7 +64,16 @@ func main() {
 			return
 		}
 
-		defer conn.Close()
+		hub.Lock()
+		hub.Connections[driverID] = conn
+		hub.Unlock()
+
+		defer func() {
+			hub.Lock()
+			delete(hub.Connections, driverID)
+			hub.Unlock()
+			conn.Close()
+		}()
 
 		fmt.Printf("Driver Connected: %s\n", driverID)
 
@@ -75,6 +93,56 @@ func main() {
 			}
 
 			conn.WriteJSON(map[string]string{"status": "received"})
+		}
+	})
+
+	r.Post("/api/v1/rides/request", func(w http.ResponseWriter, r *http.Request) {
+		riderLatStr := r.URL.Query().Get("rider_lat")
+		riderLngStr := r.URL.Query().Get("rider_lng")
+
+		rider_lat, errRiderLat := strconv.ParseFloat(riderLatStr, 64)
+		rider_lng, errRiderLng := strconv.ParseFloat(riderLngStr, 64)
+
+		if errRiderLat != nil || errRiderLng != nil {
+			http.Error(w, "Invalid rider_lat or rider_lng", http.StatusBadRequest)
+			return
+		}
+
+		drivers, err := redisCache.GetNearbyDrivers(r.Context(), rider_lat, rider_lng)
+
+		if err != nil {
+			http.Error(w, "Failed to search for drivers", http.StatusInternalServerError)
+			return
+		}
+
+		if len(drivers) == 0 {
+			http.Error(w, "No drivers available", http.StatusNotFound)
+			return
+		}
+
+		closestDriverID := drivers[0].DriverID
+
+		hub.RLock()
+		driverConn, exists := hub.Connections[closestDriverID]
+		hub.RUnlock()
+
+		if exists {
+			offerPayload := map[string]interface{}{
+				"type": "RIDE_OFFER",
+				"lat":  rider_lat,
+				"lng":  rider_lng,
+			}
+			err := driverConn.WriteJSON(offerPayload)
+			if err != nil {
+				http.Error(w, "Failed to send offer to driver", http.StatusInternalServerError)
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"status": "ride requested", "driver_id": "` + closestDriverID + `"}`))
+			return
+		} else {
+			http.Error(w, "Driver disconnected", http.StatusServiceUnavailable)
+			return
 		}
 	})
 
