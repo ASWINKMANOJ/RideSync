@@ -10,9 +10,22 @@ import (
 	"github.com/aswinkmanoj/RideSync/internal/cache"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/gorilla/websocket"
 )
 
 func main() {
+
+	var upgrader = websocket.Upgrader{
+		ReadBufferSize:  1024,
+		WriteBufferSize: 1024,
+
+		CheckOrigin: func(r *http.Request) bool { return true },
+	}
+
+	type LocationUpdate struct {
+		Latitude  float64 `json:"lat"`
+		Longitude float64 `json:"lng"`
+	}
 
 	redisCache, err := cache.NewRedisCache("localhost:6379")
 	if err != nil {
@@ -29,28 +42,40 @@ func main() {
 		w.Write([]byte(`{"status": "ok", "service": "ridesync"}`))
 	})
 
-	// Temporary endpoint to simulate a driver updating their location
-	r.Post("/api/v1/drivers/update", func(w http.ResponseWriter, r *http.Request) {
+	r.Get("/api/v1/drivers/ws", func(w http.ResponseWriter, r *http.Request) {
 		driverID := r.URL.Query().Get("id")
-		latStr := r.URL.Query().Get("lat")
-		lngStr := r.URL.Query().Get("lng")
-
-		lat, errLat := strconv.ParseFloat(latStr, 64)
-		lng, errLng := strconv.ParseFloat(lngStr, 64)
-
-		if driverID == "" || errLat != nil || errLng != nil {
-			http.Error(w, "Invalid parameters", http.StatusBadRequest)
+		if driverID == "" {
+			http.Error(w, "Driver ID is required", http.StatusBadRequest)
 			return
 		}
 
-		err := redisCache.SaveDriverLocation(r.Context(), driverID, lat, lng)
+		conn, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
-			http.Error(w, "Failed to save location", http.StatusInternalServerError)
+			log.Printf("Failed to upgrade the connection: %v", err)
 			return
 		}
 
-		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"status": "driver location updated"}`))
+		defer conn.Close()
+
+		fmt.Printf("Driver Connected: %s\n", driverID)
+
+		for {
+			var update LocationUpdate
+
+			err := conn.ReadJSON(&update)
+			if err != nil {
+				fmt.Printf("Driver Disconnected: %s\n", driverID)
+				break
+			}
+
+			err = redisCache.SaveDriverLocation(r.Context(), driverID, update.Latitude, update.Longitude)
+			if err != nil {
+				log.Printf("Failed to save location for %s: %v", driverID, err)
+				continue
+			}
+
+			conn.WriteJSON(map[string]string{"status": "received"})
+		}
 	})
 
 	r.Get("/api/v1/drivers/nearby", func(w http.ResponseWriter, r *http.Request) {
