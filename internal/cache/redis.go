@@ -13,10 +13,11 @@ import (
 )
 
 type DriverLocation struct {
-	DriverID  string  `json:"driver_id"`
-	Latitude  float64 `json:"latitude"`
-	Longitude float64 `json:"longitude"`
-	Distance  float64 `json:"distance"`
+	DriverID    string  `json:"driver_id"`
+	Latitude    float64 `json:"latitude"`
+	Longitude   float64 `json:"longitude"`
+	Distance    float64 `json:"distance"`
+	VehicleType string  `json:"vehicle_type"`
 }
 
 type RedisCache struct {
@@ -36,7 +37,7 @@ func NewRedisCache(addr string) (*RedisCache, error) {
 	return &RedisCache{client: client}, nil
 }
 
-func (r *RedisCache) SaveDriverLocation(ctx context.Context, driverId string, lat, lng float64) error {
+func (r *RedisCache) SaveDriverLocation(ctx context.Context, driverId string, lat, lng float64, vehicleType string) error {
 	latLng := h3.NewLatLng(lat, lng)
 	cell, err := h3.LatLngToCell(latLng, 8)
 	if err != nil {
@@ -45,7 +46,7 @@ func (r *RedisCache) SaveDriverLocation(ctx context.Context, driverId string, la
 
 	tileKey := fmt.Sprintf("tile:%s", cell.String())
 
-	driverData := fmt.Sprintf("%s|%f|%f", driverId, lat, lng)
+	driverData := fmt.Sprintf("%s|%f|%f|%s", driverId, lat, lng, vehicleType)
 
 	pipe := r.client.Pipeline()
 	pipe.SAdd(ctx, tileKey, driverData)
@@ -55,7 +56,7 @@ func (r *RedisCache) SaveDriverLocation(ctx context.Context, driverId string, la
 	return execErr
 }
 
-func (r *RedisCache) GetNearbyDrivers(ctx context.Context, lat, lng float64) ([]DriverLocation, error) {
+func (r *RedisCache) GetNearbyDrivers(ctx context.Context, lat, lng float64, vehicle_type string) ([]DriverLocation, error) {
 	riderLatLng := h3.NewLatLng(lat, lng)
 	originCell, err := h3.LatLngToCell(riderLatLng, 8)
 
@@ -81,19 +82,25 @@ func (r *RedisCache) GetNearbyDrivers(ctx context.Context, lat, lng float64) ([]
 	var drivers []DriverLocation
 	for _, raw := range rawDrivers {
 		parts := strings.Split(raw, "|")
-		if len(parts) != 3 {
+		if len(parts) != 4 {
+			continue
+		}
+
+		if vehicle_type != "" && parts[3] != vehicle_type {
 			continue
 		}
 
 		dLat, _ := strconv.ParseFloat(parts[1], 64)
 		dLng, _ := strconv.ParseFloat(parts[2], 64)
+
 		distance := haversine(lat, lng, dLat, dLng)
 
 		drivers = append(drivers, DriverLocation{
-			DriverID:  parts[0],
-			Latitude:  dLat,
-			Longitude: dLng,
-			Distance:  math.Round(distance*100) / 100, // Round to 2 decimal places
+			DriverID:    parts[0],
+			Latitude:    dLat,
+			Longitude:   dLng,
+			Distance:    math.Round(distance*100) / 100,
+			VehicleType: parts[3],
 		})
 	}
 	if drivers == nil {
