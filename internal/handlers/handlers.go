@@ -8,13 +8,15 @@ import (
 	"strconv"
 
 	"github.com/aswinkmanoj/RideSync/internal/cache"
+	"github.com/aswinkmanoj/RideSync/internal/db"
 	"github.com/aswinkmanoj/RideSync/internal/hub"
 	"github.com/gorilla/websocket"
 )
 
 type API struct {
-	Redis *cache.RedisCache
-	Hub   *hub.Hub
+	Redis    *cache.RedisCache
+	Hub      *hub.Hub
+	Postgres *db.PostgresStore
 }
 
 type LocationUpdate struct {
@@ -65,6 +67,13 @@ func (api *API) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 		err = api.Redis.SaveDriverLocation(r.Context(), driverID, update.Latitude, update.Longitude, update.VehicleType)
 		if err != nil {
 			log.Printf("Failed to save location for %s: %v", driverID, err)
+		}
+
+		api.Postgres.LocationChan <- db.DBLocation{
+			DriverID:    driverID,
+			Latitude:    update.Latitude,
+			Longitude:   update.Longitude,
+			VehicleType: update.VehicleType,
 		}
 
 		conn.WriteJSON(map[string]string{"status": "received"})

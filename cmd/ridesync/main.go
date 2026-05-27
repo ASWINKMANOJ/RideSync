@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/aswinkmanoj/RideSync/internal/cache"
+	"github.com/aswinkmanoj/RideSync/internal/db"
 	"github.com/aswinkmanoj/RideSync/internal/handlers"
 	"github.com/aswinkmanoj/RideSync/internal/hub"
 	"github.com/go-chi/chi/v5"
@@ -18,12 +19,18 @@ func main() {
 		log.Fatalf("Critical startup error: %v", err)
 	}
 
+	pgConnStr := "postgres://admin:secretpassword@localhost:5432/ridesync?sslmode=disable"
+	pgStore, err := db.NewPostgresStore(pgConnStr)
+	if err != nil {
+		log.Fatalf("Failed to connect to PostgreSQL: %v", err)
+	}
+
 	driverHub := hub.NewHub()
 
-	// 2. Inject dependencies into API Handlers
 	api := &handlers.API{
-		Redis: redisCache,
-		Hub:   driverHub,
+		Redis:    redisCache,
+		Hub:      driverHub,
+		Postgres: pgStore,
 	}
 
 	r := chi.NewRouter()
