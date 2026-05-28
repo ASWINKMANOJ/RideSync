@@ -1,12 +1,6 @@
 import L from "leaflet";
 import { useEffect, useState } from "react";
-import {
-  MapContainer,
-  Marker,
-  Polyline,
-  Popup,
-  TileLayer,
-} from "react-leaflet";
+import { MapContainer, Marker, Polyline, TileLayer } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 import { Car, Search } from "lucide-react";
 
